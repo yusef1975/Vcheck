@@ -1,8 +1,11 @@
 {
-  "name": "vcheck",
-  "version": "1.0.0",
+  "name": "vibecheck-mcp",
+  "version": "1.4.0",
   "description": "VibeCheck is an MCP (Model Context Protocol) server designed to act as a quality-gate for \"Vibe Coding.\" It intercepts lazy or underspecified prompts and refines them into high-density, context-aware instructions that produce better code and lower token costs.",
   "main": "dist/index.js",
+  "bin": {
+    "vibecheck": "dist/index.js"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
@@ -13,7 +16,13 @@
     "type": "git",
     "url": "git+https://github.com/yusef1975/Vcheck.git"
   },
-  "keywords": [],
+  "keywords": [
+    "mcp",
+    "vibecheck",
+    "prompt-engineering",
+    "vibe-coding",
+    "code-quality"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",

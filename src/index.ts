@@ -6,14 +6,56 @@ import * as fsp from "fs/promises";
 import * as path from "path";
 
 // ─────────────────────────────────────────────────────────────
-// VibeCheck MCP Server v1.3.0
+// VibeCheck MCP Server v1.4.0
 // Quality-gate for "Vibe Coding" — refines lazy prompts into
 // high-density, context-aware, persona-driven instructions
-// with history tracking, scoring, and security guardrails.
+// with history, scoring, security, config, and resources.
 // ─────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────
-// Personas Configuration
+// Configuration (.vibecheckrc)
+// ─────────────────────────────────────────────────────────────
+
+interface VibeCheckConfig {
+    ignoredDirs?: string[];
+    ignoredExtensions?: string[];
+    customPersonas?: Record<string, {
+        name: string;
+        emoji: string;
+        description: string;
+        expertConstraints: string[];
+    }>;
+    maxScanFiles?: number;
+    maxScanDepth?: number;
+}
+
+function loadConfig(projectRoot: string): VibeCheckConfig {
+    const configPath = path.join(projectRoot, ".vibecheckrc");
+    try {
+        if (fs.existsSync(configPath)) {
+            return JSON.parse(fs.readFileSync(configPath, "utf-8"));
+        }
+    } catch { /* use defaults */ }
+    return {};
+}
+
+const DEFAULT_CONFIG: VibeCheckConfig = {
+    ignoredDirs: [
+        "node_modules", ".git", "dist", ".next", ".nuxt", ".output",
+        "build", "coverage", "__pycache__", ".vscode", ".idea",
+        "vendor", ".turbo", ".cache", ".vibecheck",
+    ],
+    ignoredExtensions: [
+        ".lock", ".log", ".map", ".min.js", ".min.css",
+        ".ico", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+        ".woff", ".woff2", ".ttf", ".eot",
+    ],
+    maxScanFiles: 500,
+    maxScanDepth: 10,
+};
+
+// ─────────────────────────────────────────────────────────────
+// Personas
 // ─────────────────────────────────────────────────────────────
 
 interface Persona {
@@ -23,7 +65,7 @@ interface Persona {
     expertConstraints: string[];
 }
 
-const PERSONAS: Record<string, Persona> = {
+const BUILTIN_PERSONAS: Record<string, Persona> = {
     default: {
         name: "Default",
         emoji: "🧑‍💻",
@@ -93,6 +135,16 @@ const PERSONAS: Record<string, Persona> = {
     },
 };
 
+function getPersonas(config: VibeCheckConfig): Record<string, Persona> {
+    const personas = { ...BUILTIN_PERSONAS };
+    if (config.customPersonas) {
+        for (const [key, val] of Object.entries(config.customPersonas)) {
+            personas[key.toLowerCase()] = val;
+        }
+    }
+    return personas;
+}
+
 // ─────────────────────────────────────────────────────────────
 // Refinement Principles
 // ─────────────────────────────────────────────────────────────
@@ -105,6 +157,142 @@ const REFINEMENT_PRINCIPLES = [
     "5. **SCOPE CONTROL** — Explicitly state what should NOT be changed.",
     "6. **STRUCTURE** — Break complex tasks into numbered sub-tasks.",
 ];
+
+// ─────────────────────────────────────────────────────────────
+// Prompt Templates
+// ─────────────────────────────────────────────────────────────
+
+const PROMPT_TEMPLATES: Record<string, { name: string; emoji: string; template: string }> = {
+    "new_feature": {
+        name: "🚀 New Feature",
+        emoji: "🚀",
+        template: [
+            "## New Feature: [Feature Name]",
+            "",
+            "### What:",
+            "[Describe the feature in 1-2 sentences]",
+            "",
+            "### Why:",
+            "[Business justification / user story]",
+            "",
+            "### Where:",
+            "- Files to create: [list new files]",
+            "- Files to modify: [list existing files]",
+            "",
+            "### Acceptance Criteria:",
+            "- [ ] [Criterion 1]",
+            "- [ ] [Criterion 2]",
+            "- [ ] Tests pass",
+            "",
+            "### Constraints:",
+            "- Framework: [specify]",
+            "- Must NOT break: [specify]",
+        ].join("\n"),
+    },
+    "refactor": {
+        name: "🔧 Refactor",
+        emoji: "🔧",
+        template: [
+            "## Refactor: [Component/Module Name]",
+            "",
+            "### Current State:",
+            "[Describe what exists and why it needs refactoring]",
+            "",
+            "### Target State:",
+            "[Describe the desired architecture/pattern]",
+            "",
+            "### Files to Refactor:",
+            "- `path/to/file.ts` — [what changes]",
+            "",
+            "### Rules:",
+            "- Zero behavior changes (pure refactor)",
+            "- All existing tests must pass",
+            "- Add types where missing",
+        ].join("\n"),
+    },
+    "bug_fix": {
+        name: "🐛 Bug Fix",
+        emoji: "🐛",
+        template: [
+            "## Bug Fix: [Brief Description]",
+            "",
+            "### Steps to Reproduce:",
+            "1. [Step 1]",
+            "2. [Step 2]",
+            "",
+            "### Expected Behavior:",
+            "[What should happen]",
+            "",
+            "### Actual Behavior:",
+            "[What actually happens]",
+            "",
+            "### Error Output:",
+            "```",
+            "[Paste error/stack trace here]",
+            "```",
+            "",
+            "### Suspected Root Cause:",
+            "[Your hypothesis]",
+            "",
+            "### Fix Scope:",
+            "- Only modify: [specific files]",
+            "- Do NOT touch: [protected files]",
+        ].join("\n"),
+    },
+    "test_suite": {
+        name: "🧪 Test Suite",
+        emoji: "🧪",
+        template: [
+            "## Test Suite: [Module/Feature Name]",
+            "",
+            "### Target Files:",
+            "- `path/to/module.ts`",
+            "",
+            "### Test Types Required:",
+            "- [ ] Unit tests",
+            "- [ ] Integration tests",
+            "- [ ] Edge cases",
+            "",
+            "### Scenarios to Cover:",
+            "1. Happy path: [describe]",
+            "2. Error case: [describe]",
+            "3. Edge case: [describe]",
+            "",
+            "### Framework:",
+            "- Test runner: [jest/vitest/mocha]",
+            "- Assertions: [built-in/chai]",
+            "- Coverage target: [80%+]",
+        ].join("\n"),
+    },
+    "api_endpoint": {
+        name: "🌐 API Endpoint",
+        emoji: "🌐",
+        template: [
+            "## API Endpoint: [METHOD] /path/to/endpoint",
+            "",
+            "### Purpose:",
+            "[What this endpoint does]",
+            "",
+            "### Request:",
+            "```json",
+            '{ "field": "type" }',
+            "```",
+            "",
+            "### Response (200):",
+            "```json",
+            '{ "field": "type" }',
+            "```",
+            "",
+            "### Error Responses:",
+            "- 400: [when]",
+            "- 401: [when]",
+            "- 404: [when]",
+            "",
+            "### Auth Required: [Yes/No]",
+            "### Rate Limited: [Yes/No]",
+        ].join("\n"),
+    },
+};
 
 // ─────────────────────────────────────────────────────────────
 // Security Guardrails
@@ -122,52 +310,34 @@ const SECURITY_PATTERNS = [
 ];
 
 function securityCheck(prompt: string): string[] {
-    const flags: string[] = [];
-    for (const { pattern, flag } of SECURITY_PATTERNS) {
-        if (pattern.test(prompt)) {
-            flags.push(flag);
-        }
-    }
-    return flags;
+    return SECURITY_PATTERNS.filter(({ pattern }) => pattern.test(prompt)).map(({ flag }) => flag);
 }
-
-// ─────────────────────────────────────────────────────────────
-// Exclusion Lists
-// ─────────────────────────────────────────────────────────────
-
-const IGNORED_DIRS = new Set([
-    "node_modules", ".git", "dist", ".next", ".nuxt", ".output",
-    "build", "coverage", "__pycache__", ".vscode", ".idea",
-    "vendor", ".turbo", ".cache", ".vibecheck",
-]);
-
-const IGNORED_EXTENSIONS = new Set([
-    ".lock", ".log", ".map", ".min.js", ".min.css",
-    ".ico", ".png", ".jpg", ".jpeg", ".gif", ".svg",
-    ".woff", ".woff2", ".ttf", ".eot",
-]);
 
 // ─────────────────────────────────────────────────────────────
 // Project Scanner
 // ─────────────────────────────────────────────────────────────
 
-function scanProjectFiles(rootDir: string, maxFiles: number = 500): string[] {
+function scanProjectFiles(rootDir: string, config: VibeCheckConfig = {}): string[] {
+    const ignoredDirs = new Set(config.ignoredDirs || DEFAULT_CONFIG.ignoredDirs!);
+    const ignoredExts = new Set(config.ignoredExtensions || DEFAULT_CONFIG.ignoredExtensions!);
+    const maxFiles = config.maxScanFiles || DEFAULT_CONFIG.maxScanFiles!;
+    const maxDepth = config.maxScanDepth || DEFAULT_CONFIG.maxScanDepth!;
     const files: string[] = [];
 
     function walk(dir: string, depth: number = 0): void {
-        if (files.length >= maxFiles || depth > 10) return;
+        if (files.length >= maxFiles || depth > maxDepth) return;
         let entries: fs.Dirent[];
         try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
 
         for (const entry of entries) {
             if (files.length >= maxFiles) break;
             if (entry.isDirectory()) {
-                if (!IGNORED_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
+                if (!ignoredDirs.has(entry.name) && !entry.name.startsWith(".")) {
                     walk(path.join(dir, entry.name), depth + 1);
                 }
             } else if (entry.isFile()) {
                 const ext = path.extname(entry.name).toLowerCase();
-                if (!IGNORED_EXTENSIONS.has(ext)) {
+                if (!ignoredExts.has(ext)) {
                     files.push(path.relative(rootDir, path.join(dir, entry.name)).replace(/\\/g, "/"));
                 }
             }
@@ -263,7 +433,7 @@ function detectTechStack(projectRoot: string): TechStack | null {
                 const m = t.match(/^([a-zA-Z0-9_-]+)\s*([><=!~]+\s*[\d.]+)?/);
                 if (m) deps[m[1]] = m[2]?.trim() || "latest";
             }
-            const pyFw: Record<string, string> = { django: "Django", flask: "Flask", fastapi: "FastAPI", pytorch: "PyTorch", tensorflow: "TensorFlow" };
+            const pyFw: Record<string, string> = { django: "Django", flask: "Flask", fastapi: "FastAPI" };
             for (const [p, n] of Object.entries(pyFw)) { if (deps[p]) frameworks.push(`${n} (${deps[p]})`); }
             return { runtime: "Python", frameworks, dependencies: deps, devDependencies: {}, source: "requirements.txt" };
         } catch { /* skip */ }
@@ -307,7 +477,7 @@ function extractMentionedLibraries(prompt: string): string[] {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Prompt Scoring System
+// Prompt Scoring
 // ─────────────────────────────────────────────────────────────
 
 interface VibeScore {
@@ -320,21 +490,15 @@ interface VibeScore {
 }
 
 function scoreVibe(prompt: string, personaKey?: string, projectRoot?: string): VibeScore {
-    let specificity = 0;
-    let contextAvailability = 0;
-    let acceptanceCriteria = 0;
-    let personaAlignment = 0;
+    let specificity = 0, contextAvailability = 0, acceptanceCriteria = 0, personaAlignment = 0;
 
-    // ── Specificity (30 pts) ──
     if (prompt.length > 200) specificity += 10;
     else if (prompt.length > 100) specificity += 5;
     else if (prompt.length > 50) specificity += 2;
-
     if (/\.(ts|js|py|go|rs|tsx|jsx|css|html)/i.test(prompt)) specificity += 10;
     if (/function|class|method|component|api|endpoint/i.test(prompt)) specificity += 5;
     if (/line\s*\d+|L\d+/i.test(prompt)) specificity += 5;
 
-    // ── Context Availability (30 pts) ──
     if (projectRoot) {
         try {
             const files = scanProjectFiles(projectRoot);
@@ -343,32 +507,27 @@ function scoreVibe(prompt: string, personaKey?: string, projectRoot?: string): V
             else if (matched.length > 0) contextAvailability += 10;
         } catch { /* skip */ }
     }
-
     if (/```[\s\S]+```/.test(prompt)) contextAvailability += 10;
     if (/error|stack\s*trace|exception/i.test(prompt)) contextAvailability += 5;
     if (/import|require|from\s+['"]/.test(prompt)) contextAvailability += 5;
 
-    // ── Acceptance Criteria (20 pts) ──
     if (/should|must|expect|return|output/i.test(prompt)) acceptanceCriteria += 8;
     if (/test|spec|assert|verify/i.test(prompt)) acceptanceCriteria += 7;
     if (/when.*then|given.*when/i.test(prompt)) acceptanceCriteria += 5;
 
-    // ── Persona Alignment (20 pts) ──
-    const persona = PERSONAS[personaKey?.toLowerCase() || "default"] || PERSONAS["default"];
-    const promptLower = prompt.toLowerCase();
-
-    for (const constraint of persona.expertConstraints) {
-        const words = constraint.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
-        const matchCount = words.filter((w) => promptLower.includes(w)).length;
-        if (matchCount > 0) personaAlignment += Math.min(5, matchCount * 2);
+    const config = projectRoot ? loadConfig(projectRoot) : {};
+    const personas = getPersonas(config);
+    const persona = personas[personaKey?.toLowerCase() || "default"] || personas["default"];
+    const pl = prompt.toLowerCase();
+    for (const c of persona.expertConstraints) {
+        const words = c.toLowerCase().split(/\s+/).filter((w) => w.length > 4);
+        if (words.filter((w) => pl.includes(w)).length > 0) personaAlignment += 3;
     }
 
-    personaAlignment = Math.min(20, personaAlignment);
-
-    // Clamp individual scores
     specificity = Math.min(30, specificity);
     contextAvailability = Math.min(30, contextAvailability);
     acceptanceCriteria = Math.min(20, acceptanceCriteria);
+    personaAlignment = Math.min(20, personaAlignment);
 
     const total = specificity + contextAvailability + acceptanceCriteria + personaAlignment;
 
@@ -393,7 +552,7 @@ function scoreVibe(prompt: string, personaKey?: string, projectRoot?: string): V
 }
 
 // ─────────────────────────────────────────────────────────────
-// History Tracking
+// History
 // ─────────────────────────────────────────────────────────────
 
 interface HistoryEntry {
@@ -408,77 +567,67 @@ interface HistoryEntry {
 async function logHistory(entry: HistoryEntry, projectRoot: string): Promise<void> {
     const historyDir = path.join(projectRoot, ".vibecheck");
     const historyFile = path.join(historyDir, "history.json");
-
     try {
         await fsp.mkdir(historyDir, { recursive: true });
-
         let history: HistoryEntry[] = [];
-        try {
-            const raw = await fsp.readFile(historyFile, "utf-8");
-            history = JSON.parse(raw);
-        } catch {
-            // File doesn't exist yet, start fresh
-        }
-
+        try { const raw = await fsp.readFile(historyFile, "utf-8"); history = JSON.parse(raw); } catch { /* start fresh */ }
         history.push(entry);
         await fsp.writeFile(historyFile, JSON.stringify(history, null, 2), "utf-8");
-    } catch (err) {
-        console.error("Failed to log history:", err);
+    } catch (err) { console.error("Failed to log history:", err); }
+}
+
+async function readHistory(projectRoot: string): Promise<HistoryEntry[]> {
+    const historyFile = path.join(projectRoot, ".vibecheck", "history.json");
+    try {
+        const raw = await fsp.readFile(historyFile, "utf-8");
+        return JSON.parse(raw);
+    } catch {
+        return [];
     }
 }
 
 // ─────────────────────────────────────────────────────────────
-// Prompt Refinement Engine (v4)
+// Refinement Engine
 // ─────────────────────────────────────────────────────────────
 
 function refinePrompt(rawPrompt: string, projectRoot?: string, personaKey?: string): string {
     const sections: string[] = [];
-    const persona = PERSONAS[personaKey?.toLowerCase() || "default"] || PERSONAS["default"];
-
-    // ── Security Check ──
+    const config = projectRoot ? loadConfig(projectRoot) : {};
+    const personas = getPersonas(config);
+    const persona = personas[personaKey?.toLowerCase() || "default"] || personas["default"];
     const secFlags = securityCheck(rawPrompt);
-
-    // ── Vibe Score ──
     const score = scoreVibe(rawPrompt, personaKey, projectRoot);
 
     sections.push(`# 🎯 VibeCheck — Refined Prompt\n`);
-    sections.push(`> *v1.3.0 | ${persona.emoji} ${persona.name} | Vibe Score: **${score.total}/100***\n`);
+    sections.push(`> *v1.4.0 | ${persona.emoji} ${persona.name} | Vibe Score: **${score.total}/100***\n`);
 
-    // Security warnings (if any)
     if (secFlags.length > 0) {
         sections.push(`## 🔒 Security Alert\n`);
-        sections.push(`> **WARNING:** This prompt contains potentially dangerous instructions.\n`);
+        sections.push(`> **WARNING:** Potentially dangerous instructions detected.\n`);
         secFlags.forEach((f) => sections.push(`- ${f}`));
-        sections.push(`\n> Please review and ensure these are intentional before executing.\n`);
+        sections.push(`\n> Review and ensure these are intentional.\n`);
     }
 
-    // Vibe Score badge
     sections.push(`## 📊 Vibe Score\n`);
     sections.push(score.breakdown);
     sections.push("");
 
-    // Persona constraints
     sections.push(`## ${persona.emoji} Expert Constraints (${persona.name})\n`);
     sections.push(`*${persona.description}*\n`);
     persona.expertConstraints.forEach((c, i) => sections.push(`${i + 1}. ${c}`));
     sections.push("");
 
-    // Coding standards
     sections.push("## 📋 Coding Standards\n");
     sections.push(REFINEMENT_PRINCIPLES.join("\n"));
     sections.push("");
 
-    // Tech stack
     if (projectRoot) {
         const techStack = detectTechStack(projectRoot);
         if (techStack) {
             sections.push(`## 🔧 Tech Stack\n`);
-            sections.push(`| Property | Value |`);
-            sections.push(`|----------|-------|`);
+            sections.push(`| Property | Value |\n|----------|-------|`);
             sections.push(`| **Runtime** | ${techStack.runtime} |`);
-            if (techStack.frameworks.length > 0) {
-                sections.push(`| **Frameworks** | ${techStack.frameworks.join(", ")} |`);
-            }
+            if (techStack.frameworks.length > 0) sections.push(`| **Frameworks** | ${techStack.frameworks.join(", ")} |`);
             sections.push("");
 
             const mentioned = extractMentionedLibraries(rawPrompt);
@@ -493,9 +642,8 @@ function refinePrompt(rawPrompt: string, projectRoot?: string, personaKey?: stri
             }
         }
 
-        // Context suggestion
         try {
-            const files = scanProjectFiles(projectRoot);
+            const files = scanProjectFiles(projectRoot, config);
             const { matched, keywords } = suggestContext(rawPrompt, files);
             if (matched.length > 0) {
                 sections.push("## 📂 Recommended Context\n");
@@ -506,9 +654,8 @@ function refinePrompt(rawPrompt: string, projectRoot?: string, personaKey?: stri
         } catch { /* skip */ }
     }
 
-    // Quality issues
     const issues: string[] = [];
-    if (rawPrompt.length < 50) issues.push("⚠️ **Too Short** — Add file paths, behavior, constraints.");
+    if (rawPrompt.length < 50) issues.push("⚠️ **Too Short**");
     if (!/\.(ts|js|py|go|rs|tsx|jsx|css|html)/i.test(rawPrompt)) issues.push("⚠️ **No File References**");
     if (!/should|must|expect|return|output/i.test(rawPrompt)) issues.push("⚠️ **No Acceptance Criteria**");
 
@@ -518,7 +665,6 @@ function refinePrompt(rawPrompt: string, projectRoot?: string, personaKey?: stri
         sections.push("");
     }
 
-    // Original + Refined
     sections.push("## 📝 Original Prompt\n");
     sections.push(`\`\`\`\n${rawPrompt}\n\`\`\`\n`);
 
@@ -536,15 +682,61 @@ function refinePrompt(rawPrompt: string, projectRoot?: string, personaKey?: stri
 }
 
 // ─────────────────────────────────────────────────────────────
-// MCP Server Setup
+// MCP Server
 // ─────────────────────────────────────────────────────────────
 
 const server = new McpServer({
     name: "vibecheck",
-    version: "1.3.0",
+    version: "1.4.0",
 });
 
-// ── Tool: refine_vibe_prompt ──
+// ── Resources ──
+
+server.resource(
+    "history",
+    "vibecheck://history",
+    { description: "The VibeCheck prompt refinement history log.", mimeType: "application/json" },
+    async (uri) => {
+        const root = process.cwd();
+        const history = await readHistory(root);
+        return {
+            contents: [{
+                uri: uri.href,
+                mimeType: "application/json",
+                text: JSON.stringify(history, null, 2),
+            }],
+        };
+    }
+);
+
+server.resource(
+    "rules",
+    "vibecheck://rules",
+    { description: "The current VibeCheck refinement principles and coding standards.", mimeType: "text/markdown" },
+    async (uri) => {
+        let content = "# VibeCheck Refinement Principles\n\n";
+        content += REFINEMENT_PRINCIPLES.join("\n");
+        content += "\n\n# Available Personas\n\n";
+        for (const [key, persona] of Object.entries(BUILTIN_PERSONAS)) {
+            content += `## ${persona.emoji} ${persona.name} (\`${key}\`)\n`;
+            content += `${persona.description}\n\n`;
+            persona.expertConstraints.forEach((c) => { content += `- ${c}\n`; });
+            content += "\n";
+        }
+        return {
+            contents: [{
+                uri: uri.href,
+                mimeType: "text/markdown",
+                text: content,
+            }],
+        };
+    }
+);
+
+// ── Tools ──
+
+const personaEnum = z.enum(["Default", "Senior Engineer", "Product Manager", "Security Auditor", "Performance Specialist"]).optional();
+
 server.tool(
     "refine_vibe_prompt",
     "Validates, scores, and refines a prompt with persona-driven constraints, tech-stack awareness, dependency checking, context suggestion, and security guardrails.",
@@ -552,190 +744,194 @@ server.tool(
         prompt: z.string().describe("The raw prompt to validate and refine."),
         context: z.string().optional().describe("Optional additional context."),
         projectRoot: z.string().optional().describe("Absolute path to project root. Defaults to cwd."),
-        persona: z.enum(["Default", "Senior Engineer", "Product Manager", "Security Auditor", "Performance Specialist"]).optional()
-            .describe("Expert persona to apply."),
+        persona: personaEnum.describe("Expert persona to apply."),
     },
     async ({ prompt, context, projectRoot, persona }) => {
         let inputPrompt = prompt;
         if (context) inputPrompt += `\n\n### Additional Context\n${context}`;
-
         const root = projectRoot || process.cwd();
         const refined = refinePrompt(inputPrompt, root, persona);
-
-        // Log to history
         const score = scoreVibe(inputPrompt, persona, root);
-        const secFlags = securityCheck(inputPrompt);
         await logHistory({
-            timestamp: new Date().toISOString(),
-            persona: persona || "Default",
-            rawPrompt: inputPrompt,
-            refinedPrompt: refined,
-            vibeScore: score.total,
-            securityFlags: secFlags,
+            timestamp: new Date().toISOString(), persona: persona || "Default",
+            rawPrompt: inputPrompt, refinedPrompt: refined, vibeScore: score.total,
+            securityFlags: securityCheck(inputPrompt),
         }, root);
-
         return { content: [{ type: "text" as const, text: refined }] };
     }
 );
 
-// ── Tool: suggest_vibe_context ──
 server.tool(
     "suggest_vibe_context",
-    "Scans the project and suggests relevant files to include in a coding prompt.",
+    "Scans the project and suggests relevant files to include.",
     {
         query: z.string().describe("What you want to do."),
         projectRoot: z.string().optional().describe("Absolute path to project root."),
     },
     async ({ query, projectRoot }) => {
         const root = projectRoot || process.cwd();
-        const files = scanProjectFiles(root);
+        const config = loadConfig(root);
+        const files = scanProjectFiles(root, config);
         const { matched, keywords } = suggestContext(query, files);
-
-        let output = `# 📂 Suggested Context Files\n\n`;
-        output += `> Scanned **${files.length}** files | Keywords: ${keywords.map((k) => `\`${k}\``).join(", ")}\n\n`;
-
-        if (matched.length === 0) {
-            output += `No matching files found.\n`;
-        } else {
-            output += `| # | File |\n|---|------|\n`;
-            matched.forEach((f, i) => { output += `| ${i + 1} | \`${f}\` |\n`; });
-            output += `\n> 💡 Include these for better code generation.`;
-        }
-
+        let output = `# 📂 Suggested Context Files\n\n> Scanned **${files.length}** files | Keywords: ${keywords.map((k) => `\`${k}\``).join(", ")}\n\n`;
+        if (matched.length === 0) { output += `No matching files found.\n`; }
+        else { output += `| # | File |\n|---|------|\n`; matched.forEach((f, i) => { output += `| ${i + 1} | \`${f}\` |\n`; }); }
         return { content: [{ type: "text" as const, text: output }] };
     }
 );
 
-// ── Tool: detect_tech_stack ──
 server.tool(
     "detect_tech_stack",
-    "Identifies the project's frameworks, libraries, and versions from manifest files.",
-    {
-        projectRoot: z.string().optional().describe("Absolute path to project root."),
-    },
+    "Identifies the project's frameworks, libraries, and versions.",
+    { projectRoot: z.string().optional().describe("Absolute path to project root.") },
     async ({ projectRoot }) => {
         const root = projectRoot || process.cwd();
         const ts = detectTechStack(root);
-
-        if (!ts) {
-            return { content: [{ type: "text" as const, text: "# ❌ No Tech Stack Detected\n\nNo manifest files found." }] };
-        }
-
-        let output = `# 🔧 Tech Stack Report\n\n`;
-        output += `| Property | Value |\n|----------|-------|\n`;
-        output += `| **Runtime** | ${ts.runtime} |\n| **Source** | \`${ts.source}\` |\n`;
+        if (!ts) return { content: [{ type: "text" as const, text: "# ❌ No Tech Stack Detected" }] };
+        let output = `# 🔧 Tech Stack Report\n\n| Property | Value |\n|----------|-------|\n| **Runtime** | ${ts.runtime} |\n| **Source** | \`${ts.source}\` |\n`;
         if (ts.frameworks.length > 0) output += `| **Frameworks** | ${ts.frameworks.join(", ")} |\n`;
-
-        output += `\n## 📦 Dependencies (${Object.keys(ts.dependencies).length})\n\n`;
-        output += `| Package | Version |\n|---------|--------|\n`;
+        output += `\n## 📦 Dependencies (${Object.keys(ts.dependencies).length})\n\n| Package | Version |\n|---------|---------|\n`;
         for (const [p, v] of Object.entries(ts.dependencies)) output += `| \`${p}\` | ${v} |\n`;
-
-        if (Object.keys(ts.devDependencies).length > 0) {
-            output += `\n## 🛠️ Dev Dependencies (${Object.keys(ts.devDependencies).length})\n\n`;
-            output += `| Package | Version |\n|---------|--------|\n`;
-            for (const [p, v] of Object.entries(ts.devDependencies)) output += `| \`${p}\` | ${v} |\n`;
-        }
-
         return { content: [{ type: "text" as const, text: output }] };
     }
 );
 
-// ── Tool: score_vibe (new in Task 004) ──
 server.tool(
     "score_vibe",
-    "Scores a prompt from 1-100 based on specificity, context, acceptance criteria, and persona alignment.",
+    "Scores a prompt 1-100 based on specificity, context, criteria, and persona alignment.",
     {
         prompt: z.string().describe("The prompt to score."),
-        persona: z.enum(["Default", "Senior Engineer", "Product Manager", "Security Auditor", "Performance Specialist"]).optional()
-            .describe("Persona to score alignment against."),
+        persona: personaEnum.describe("Persona to score against."),
         projectRoot: z.string().optional().describe("Absolute path to project root."),
     },
     async ({ prompt, persona, projectRoot }) => {
         const root = projectRoot || process.cwd();
         const score = scoreVibe(prompt, persona, root);
         const secFlags = securityCheck(prompt);
+        let output = `# 📊 Vibe Score Report\n\n${score.breakdown}\n`;
+        if (secFlags.length > 0) { output += `\n## 🔒 Security Flags\n\n`; secFlags.forEach((f) => { output += `- ${f}\n`; }); }
+        output += `\n## 💡 Tips\n\n`;
+        if (score.specificity < 20) output += `- Add file paths, function names, line references.\n`;
+        if (score.contextAvailability < 20) output += `- Include code snippets or error messages.\n`;
+        if (score.acceptanceCriteria < 15) output += `- Define expected output or test cases.\n`;
+        if (score.personaAlignment < 10) output += `- Align with your selected persona's concerns.\n`;
+        return { content: [{ type: "text" as const, text: output }] };
+    }
+);
 
-        let output = `# 📊 Vibe Score Report\n\n`;
-        output += score.breakdown;
-        output += `\n`;
+server.tool(
+    "refinement_loop",
+    "Takes feedback on a refined prompt and generates an improved V2.",
+    {
+        original_prompt: z.string().describe("The original raw prompt."),
+        refined_prompt: z.string().describe("The previously refined prompt."),
+        feedback: z.string().describe("User's feedback on what to improve."),
+        persona: personaEnum.describe("Persona to apply."),
+        projectRoot: z.string().optional().describe("Absolute path to project root."),
+    },
+    async ({ original_prompt, refined_prompt, feedback, persona, projectRoot }) => {
+        const root = projectRoot || process.cwd();
+        const config = loadConfig(root);
+        const personas = getPersonas(config);
+        const personaObj = personas[persona?.toLowerCase() || "default"] || personas["default"];
+        const combined = `${original_prompt}\n\n${feedback}`;
+        const score = scoreVibe(combined, persona, root);
 
-        if (secFlags.length > 0) {
-            output += `\n## 🔒 Security Flags\n\n`;
-            secFlags.forEach((f) => { output += `- ${f}\n`; });
+        let v2 = `# 🔄 Refined Prompt — Version 2\n\n`;
+        v2 += `> *Persona: ${personaObj.emoji} ${personaObj.name} | Vibe Score: **${score.total}/100***\n\n`;
+        v2 += `## 💬 Feedback Applied\n\n> ${feedback}\n\n`;
+        v2 += `## ✨ Improved Instruction\n\n${original_prompt}\n\n### Adjustments\n\n${feedback}\n\n`;
+        v2 += `### ${personaObj.emoji} Expert Constraints\n\n`;
+        personaObj.expertConstraints.forEach((c, i) => { v2 += `${i + 1}. ${c}\n`; });
+        v2 += `\n## 📊 Updated Vibe Score\n\n${score.breakdown}`;
+
+        try {
+            const files = scanProjectFiles(root, config);
+            const { matched, keywords } = suggestContext(combined, files);
+            if (matched.length > 0) {
+                v2 += `\n\n## 📂 Updated Context\n\n*Keywords: ${keywords.map((k) => `\`${k}\``).join(", ")}*\n\n`;
+                matched.forEach((f) => { v2 += `- \`${f}\`\n`; });
+            }
+        } catch { /* skip */ }
+
+        await logHistory({
+            timestamp: new Date().toISOString(), persona: persona || "Default",
+            rawPrompt: `[V2] ${original_prompt}`, refinedPrompt: v2, vibeScore: score.total,
+            securityFlags: securityCheck(combined),
+        }, root);
+
+        return { content: [{ type: "text" as const, text: v2 }] };
+    }
+);
+
+// ── Tool: init_vibecheck (new in Task 005) ──
+server.tool(
+    "init_vibecheck",
+    "Generates a default .vibecheckrc config and .gitignore entries for a project.",
+    { projectRoot: z.string().optional().describe("Absolute path to project root.") },
+    async ({ projectRoot }) => {
+        const root = projectRoot || process.cwd();
+
+        // Write .vibecheckrc
+        const configPath = path.join(root, ".vibecheckrc");
+        const defaultRc = {
+            ignoredDirs: DEFAULT_CONFIG.ignoredDirs,
+            ignoredExtensions: DEFAULT_CONFIG.ignoredExtensions,
+            maxScanFiles: 500,
+            maxScanDepth: 10,
+            customPersonas: {},
+        };
+
+        await fsp.writeFile(configPath, JSON.stringify(defaultRc, null, 2), "utf-8");
+
+        // Ensure .vibecheck dir
+        await fsp.mkdir(path.join(root, ".vibecheck"), { recursive: true });
+
+        // Update .gitignore
+        const gitignorePath = path.join(root, ".gitignore");
+        let gitignore = "";
+        try { gitignore = await fsp.readFile(gitignorePath, "utf-8"); } catch { /* new file */ }
+        const entries = [".vibecheck/history.json"];
+        const toAdd = entries.filter((e) => !gitignore.includes(e));
+        if (toAdd.length > 0) {
+            gitignore += `\n# VibeCheck\n${toAdd.join("\n")}\n`;
+            await fsp.writeFile(gitignorePath, gitignore, "utf-8");
         }
 
-        output += `\n## 💡 Improvement Tips\n\n`;
-        if (score.specificity < 20) output += `- Add file paths, function names, and line references.\n`;
-        if (score.contextAvailability < 20) output += `- Include code snippets, error messages, or stack traces.\n`;
-        if (score.acceptanceCriteria < 15) output += `- Define expected output, test cases, or behavior.\n`;
-        if (score.personaAlignment < 10) output += `- Align your prompt with the selected persona's concerns.\n`;
+        let output = `# ✅ VibeCheck Initialized\n\n`;
+        output += `| File | Status |\n|------|--------|\n`;
+        output += `| \`.vibecheckrc\` | Created with default config |\n`;
+        output += `| \`.vibecheck/\` | Directory created |\n`;
+        output += `| \`.gitignore\` | Updated with VibeCheck entries |\n`;
+        output += `\n> Edit \`.vibecheckrc\` to customize personas, ignored dirs, and scan limits.`;
 
         return { content: [{ type: "text" as const, text: output }] };
     }
 );
 
-// ── Tool: refinement_loop (new in Task 004) ──
+// ── Tool: list_vibe_templates (new in Task 005) ──
 server.tool(
-    "refinement_loop",
-    "Takes user feedback on a refined prompt and generates an improved Version 2.",
+    "list_vibe_templates",
+    "Returns common starter prompt templates for new features, refactors, bug fixes, tests, and API endpoints.",
     {
-        original_prompt: z.string().describe("The original raw prompt."),
-        refined_prompt: z.string().describe("The previously refined prompt."),
-        feedback: z.string().describe("User's feedback on what to improve."),
-        persona: z.enum(["Default", "Senior Engineer", "Product Manager", "Security Auditor", "Performance Specialist"]).optional()
-            .describe("Persona to apply."),
-        projectRoot: z.string().optional().describe("Absolute path to project root."),
+        template: z.enum(["new_feature", "refactor", "bug_fix", "test_suite", "api_endpoint"]).optional()
+            .describe("Specific template to return. Omit to list all."),
     },
-    async ({ original_prompt, refined_prompt, feedback, persona, projectRoot }) => {
-        const root = projectRoot || process.cwd();
-        const personaObj = PERSONAS[persona?.toLowerCase() || "default"] || PERSONAS["default"];
-
-        let v2 = `# 🔄 Refined Prompt — Version 2\n\n`;
-        v2 += `> *Iterative refinement based on user feedback*\n`;
-        v2 += `> *Persona: ${personaObj.emoji} ${personaObj.name}*\n\n`;
-
-        v2 += `## 💬 Feedback Applied\n\n`;
-        v2 += `> ${feedback}\n\n`;
-
-        v2 += `## ✨ Improved Instruction\n\n`;
-        v2 += `${original_prompt}\n\n`;
-        v2 += `### Adjustments Based on Feedback\n\n`;
-        v2 += `${feedback}\n\n`;
-
-        // Re-apply persona constraints
-        v2 += `### ${personaObj.emoji} Expert Constraints\n\n`;
-        personaObj.expertConstraints.forEach((c, i) => { v2 += `${i + 1}. ${c}\n`; });
-
-        // Re-score
-        const combinedPrompt = `${original_prompt}\n\n${feedback}`;
-        const score = scoreVibe(combinedPrompt, persona, root);
-        v2 += `\n## 📊 Updated Vibe Score\n\n`;
-        v2 += score.breakdown;
-
-        // Context suggestion on combined prompt
-        if (root) {
-            try {
-                const files = scanProjectFiles(root);
-                const { matched, keywords } = suggestContext(combinedPrompt, files);
-                if (matched.length > 0) {
-                    v2 += `\n\n## 📂 Updated Context Suggestions\n\n`;
-                    v2 += `*Keywords: ${keywords.map((k) => `\`${k}\``).join(", ")}*\n\n`;
-                    matched.forEach((f) => { v2 += `- \`${f}\`\n`; });
-                }
-            } catch { /* skip */ }
+    async ({ template }) => {
+        if (template && PROMPT_TEMPLATES[template]) {
+            const t = PROMPT_TEMPLATES[template];
+            return { content: [{ type: "text" as const, text: `# ${t.name}\n\n\`\`\`markdown\n${t.template}\n\`\`\`` }] };
         }
 
-        // Log iteration
-        await logHistory({
-            timestamp: new Date().toISOString(),
-            persona: persona || "Default",
-            rawPrompt: `[ITERATION] ${original_prompt}`,
-            refinedPrompt: v2,
-            vibeScore: score.total,
-            securityFlags: securityCheck(combinedPrompt),
-        }, root);
+        let output = `# 📄 VibeCheck Prompt Templates\n\n`;
+        output += `Use these structured templates for higher-quality prompts.\n\n`;
+        output += `| Template | Key |\n|----------|-----|\n`;
+        for (const [key, t] of Object.entries(PROMPT_TEMPLATES)) {
+            output += `| ${t.name} | \`${key}\` |\n`;
+        }
+        output += `\n> Call \`list_vibe_templates\` with a specific template key to get the full template.`;
 
-        return { content: [{ type: "text" as const, text: v2 }] };
+        return { content: [{ type: "text" as const, text: output }] };
     }
 );
 
@@ -746,7 +942,7 @@ server.tool(
 async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error("🎯 VibeCheck MCP Server v1.3.0 is running on stdio...");
+    console.error("🎯 VibeCheck MCP Server v1.4.0 is running on stdio...");
 }
 
 main().catch((error) => {
