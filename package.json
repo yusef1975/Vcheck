@@ -1,6 +1,6 @@
 {
   "name": "vibecheck-mcp",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "VibeCheck is an MCP (Model Context Protocol) server designed to act as a quality-gate for \"Vibe Coding.\" It intercepts lazy or underspecified prompts and refines them into high-density, context-aware instructions that produce better code and lower token costs.",
   "main": "dist/index.js",
   "bin": {
@@ -32,8 +32,10 @@
   "homepage": "https://github.com/yusef1975/Vcheck#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
-    "@types/node": "^25.2.3",
-    "typescript": "^5.9.3",
     "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "typescript": "^5.9.3"
   }
 }
